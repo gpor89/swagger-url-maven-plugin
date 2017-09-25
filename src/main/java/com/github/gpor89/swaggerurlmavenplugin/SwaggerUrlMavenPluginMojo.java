@@ -10,6 +10,7 @@ import org.apache.maven.plugins.annotations.Parameter;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.PrintWriter;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -23,14 +24,17 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
     /**
      * The greeting to display.
      */
-    @Parameter(property = "generateurls.swaggerJsonSpecFile", defaultValue = "/target/swagger.json")
+    @Parameter(property = "generateurls.swaggerJsonSpecFile", defaultValue = "target/swagger.json")
     private File swaggerSpec;
 
-    @Parameter(property = "generateurls.outputFile", defaultValue = "/target/requests.txt")
+    @Parameter(property = "generateurls.outputFile", defaultValue = "target/requests.txt")
     private File outputFile;
 
     @Parameter(property = "generateurls.overrideHost", defaultValue = "{myHost}")
     private String host;
+
+    @Parameter(property = "generateurls.template", defaultValue = "{produces} {httpMethod} {url}")
+    private String template;
 
     public SwaggerUrlMavenPluginMojo() {
     }
@@ -118,16 +122,20 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
                 }
             }
 
-            Set<String> apiSet = new TreeSet<String>();
+            Set<ApiEntry> apiSet = new TreeSet<ApiEntry>();
             for (Api api : apiList) {
                 apiSet.addAll(api.getUrlOptions());
             }
 
-            for (String api : apiSet) {
-                getLog().info(api);
+            getLog().info("Generating urls...");
+            PrintWriter writer = new PrintWriter(outputFile, "UTF-8");
+            for (ApiEntry api : apiSet) {
+                getLog().info(api.getAsLine(template));
+                writer.println(api.getAsLine(template));
             }
+            writer.close();
 
-            getLog().info("Requests generated");
+            getLog().info("Urls generated");
         } catch (IOException e) {
 
         }
@@ -220,6 +228,65 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
 
     }
 
+    public class ApiEntry implements Comparable<ApiEntry> {
+
+        private String url;
+        private String httpMethod;
+        private String produces;
+
+        public ApiEntry(String url) {
+            this.url = url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        public void setHttpMethod(String httpMethod) {
+            this.httpMethod = httpMethod;
+        }
+
+        public void setProduces(String produces) {
+            this.produces = produces;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+
+            ApiEntry apiEntry = (ApiEntry) o;
+
+            if (!url.equals(apiEntry.url)) return false;
+            if (!httpMethod.equals(apiEntry.httpMethod)) return false;
+            return produces != null ? produces.equals(apiEntry.produces) : apiEntry.produces == null;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = url.hashCode();
+            result = 31 * result + httpMethod.hashCode();
+            result = 31 * result + (produces != null ? produces.hashCode() : 0);
+            return result;
+        }
+
+        public int compareTo(ApiEntry o) {
+
+            int i = this.url.compareTo(o.url);
+
+            return i == 0 ? -1 : i;
+        }
+
+        public String getAsLine(String template) {
+
+            String s = template.replaceAll("\\{produces\\}", produces);
+            s = s.replaceAll("\\{httpMethod\\}", httpMethod);
+            s = s.replaceAll("\\{url\\}", url);
+
+            return s;
+        }
+    }
+
     public class Api {
 
         //contains scheme host and global base paths
@@ -265,9 +332,9 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
             }
         }
 
-        public Set<String> getUrlOptions() {
+        public Set<ApiEntry> getUrlOptions() {
 
-            Set<String> methodCallSet = new TreeSet<String>();
+            Set<ApiEntry> methodCallSet = new TreeSet<ApiEntry>();
 
             //initial set are urls with required query params
             StringBuilder sb = new StringBuilder();
@@ -281,18 +348,23 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
             }
 
             String queryParam = sb.length() > 0 ? "?" + sb.toString() : "";
-            for (String baseUrl : baseUrlSet) {
-                methodCallSet.add(httpMethod.toUpperCase() + " " + baseUrl + apiPath + queryParam);
+            for (String url : baseUrlSet) {
+                ApiEntry e = new ApiEntry(url + apiPath + queryParam);
+                e.setHttpMethod(httpMethod.toUpperCase());
+                methodCallSet.add(e);
             }
 
             //enrich with produce
-            Set<String> tmpSet = new HashSet<String>();
+            Set<ApiEntry> tmpSet = new HashSet<ApiEntry>();
             for (String produce : produceSet) {
-                for (String url : methodCallSet) {
-                    tmpSet.add(produce + " " + url);
+                for (ApiEntry apiEntry : methodCallSet) {
+                    apiEntry.setProduces(produce);
+                    tmpSet.add(apiEntry);
                 }
             }
-            methodCallSet = new TreeSet<String>(tmpSet);
+            if (!produceSet.isEmpty()) {
+                methodCallSet = new TreeSet<ApiEntry>(tmpSet);
+            }
 
 
             //now we multiply set power of optional query params
@@ -305,7 +377,7 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
 
             final Set<Set<String>> powerSetResult = powerSet(optionalQueryParams);
 
-            Set<String> methodCallSetTmp = new HashSet<String>();
+            Set<ApiEntry> methodCallSetTmp = new HashSet<ApiEntry>();
             for (Set<String> qpPermutation : powerSetResult) {
                 StringBuilder qsb = new StringBuilder();
                 for (String paramName : qpPermutation) {
@@ -314,8 +386,11 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
                 if (qsb.length() > 0) {
                     qsb.delete(qsb.length() - 1, qsb.length());
 
-                    for (String method : methodCallSet) {
-                        methodCallSetTmp.add(method + "?" + qsb.toString());
+                    for (ApiEntry origEn : methodCallSet) {
+                        ApiEntry en = new ApiEntry(origEn.url + "?" + qsb.toString());
+                        en.setProduces(origEn.produces);
+                        en.setHttpMethod(origEn.httpMethod);
+                        methodCallSetTmp.add(en);
                     }
                 }
             }
@@ -324,9 +399,9 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
             methodCallSet.addAll(methodCallSetTmp);
 
             //try to find enum set by param and multiply...
-            methodCallSetTmp = new TreeSet<String>(methodCallSet);
-            for (String url : methodCallSetTmp) {
-                Matcher matcher = PARAM_PATTERN.matcher(url);
+            methodCallSetTmp = new TreeSet<ApiEntry>(methodCallSet);
+            for (ApiEntry apiEntry : methodCallSetTmp) {
+                Matcher matcher = PARAM_PATTERN.matcher(apiEntry.url);
                 while (matcher.find()) {
                     String paramName = matcher.group(1);
                     ApiParameter apiParameter;
@@ -340,12 +415,15 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
 
                     if (!apiParameter.values.isEmpty()) {
                         //remove entry with placeholders, we will insert entries with enum values
-                        methodCallSet.remove(url);
+                        methodCallSet.remove(apiEntry);
                     }
 
                     for (String enumValue : apiParameter.values) {
-                        String urlWithEnumValue = url.replaceAll("\\{" + paramName + "\\}", enumValue);
-                        methodCallSet.add(urlWithEnumValue);
+                        String urlWithEnumValue = apiEntry.url.replaceAll("\\{" + paramName + "\\}", enumValue);
+                        ApiEntry e = new ApiEntry(urlWithEnumValue);
+                        e.setHttpMethod(apiEntry.httpMethod);
+                        e.setProduces(apiEntry.produces);
+                        methodCallSet.add(e);
                     }
                 }
             }
