@@ -40,5 +40,3 @@ curl --header "Accept: application/json" -X GET http://petstore.swagger.io/api/p
 curl --header "Accept: application/json" -X GET http://petstore.swagger.io/api/pets?tags={tags}
 curl --header "Accept: application/json" -X POST http://petstore.swagger.io/api/pets
 ```
-
-Placeholders may be replaced with example values. TBD.
