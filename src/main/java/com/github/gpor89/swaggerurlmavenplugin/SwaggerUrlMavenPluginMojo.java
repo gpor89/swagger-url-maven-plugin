@@ -3,8 +3,6 @@ package com.github.gpor89.swaggerurlmavenplugin;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.github.gpor89.swaggerurlmavenplugin.SwaggerUrlMavenPluginMojo.ApiParameter.ParamType;
-
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Mojo;
@@ -428,6 +426,7 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
             if (!produceSet.isEmpty()) {
                 methodCallSet = new TreeSet<ApiEntry>(tmpSet);
             }
+
 
             //now we multiply set power of optional query params
             Set<String> optionalQueryParams = new TreeSet<String>();
