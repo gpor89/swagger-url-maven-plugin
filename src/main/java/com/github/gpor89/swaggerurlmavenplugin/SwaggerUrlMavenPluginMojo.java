@@ -143,6 +143,7 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
             }
 
             Set<ApiEntry> apiSet = new TreeSet<ApiEntry>();
+
             for (Api api : apiList) {
                 apiSet.addAll(api.getUrlOptions());
             }
@@ -494,6 +495,14 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
                             apiParamStack.add(e);
                         }
                     }
+                }
+
+                ApiEntry e = new ApiEntry(apiUrl);
+                e.setHttpMethod(apiEntry.httpMethod);
+                e.setProduces(apiEntry.produces);
+                e.setFormParams(apiEntry.formParams);
+                if (!apiUrl.contains("{")) {
+                    apiParamStack.add(e);
                 }
 
 
