@@ -1,39 +1,41 @@
 package com.github.gpor89.swaggerurlmavenplugin;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.github.gpor89.swaggerurlmavenplugin.SwaggerUrlMavenPluginMojo.ApiParameter.ParamType;
 
 import org.apache.maven.plugin.AbstractMojo;
 import org.apache.maven.plugin.MojoExecutionException;
 import org.apache.maven.plugins.annotations.Mojo;
 import org.apache.maven.plugins.annotations.Parameter;
+import org.yaml.snakeyaml.Yaml;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Mojo(name = "generateurls")
 public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static Pattern PARAM_PATTERN = Pattern.compile("\\{(.*?)\\}");
 
     /**
      * The greeting to display.
      */
-    @Parameter(defaultValue = "target/swagger.json")
+    @Parameter(defaultValue = "target/consumerApi.yaml")
     private File swaggerSpec;
 
     @Parameter(defaultValue = "target/requests.txt")
@@ -60,7 +62,7 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
     public static Set<Set<String>> queryParamOptions(Set<String> originalSet) {
         Set<Set<String>> sets = new HashSet<Set<String>>();
         if (originalSet.isEmpty()) {
-            sets.add(new HashSet<String>());
+            sets.add(new HashSet<>());
             return sets;
         }
 
@@ -88,55 +90,59 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
         }
 
         try {
-            final JsonNode swaggerSpecNode = MAPPER.readTree(swaggerSpec);
+            Yaml yaml = new Yaml();
+            InputStream inputStream = new FileInputStream(swaggerSpec);
+            Map<String, Object> swaggerSpecNode = yaml.load(inputStream);
 
             //todo check spec version
-            final String swaggerVer = swaggerSpecNode.get("swagger").asText();
-            if (!"2.0".equals(swaggerVer)) {
+            final String swaggerVer = (String) swaggerSpecNode.get("openapi");
+            if (swaggerVer == null || !swaggerVer.startsWith("3.")) {
                 getLog().warn("Unknown swagger spec version " + swaggerVer);
             }
 
-            final List<Api> apiList = new LinkedList<Api>();
+            final List<Api> apiList = new LinkedList<>();
 
-            List<String> globalSchemes = parseArray(swaggerSpecNode, "schemes");
-            List<String> globalProduces = parseArray(swaggerSpecNode, "produces");
-            String globalHost = host != null ? host : (swaggerSpecNode.get("host") == null ? "" : swaggerSpecNode.get(
-                "host").asText());
-            String globalBasePath = swaggerSpecNode.get("basePath") == null ? "" : swaggerSpecNode.get("basePath")
-                .asText();
-
-            if ("/".equalsIgnoreCase(globalBasePath)) {
-                globalBasePath = "";
+            List<String> globalSchemes = Arrays.asList("http");
+            String globalHost = host;
+            if (globalHost == null) {
+                final List servers = (List) swaggerSpecNode.get("servers");
+                if (servers != null && !servers.isEmpty()) {
+                    final Map serv = (Map) servers.get(0);
+                    if (serv != null) {
+                        globalHost = (String) serv.get("url");
+                    }
+                }
             }
 
-            Iterator<Map.Entry<String, JsonNode>> paths = swaggerSpecNode.get("paths").fields();
-            while (paths.hasNext()) {
-                Map.Entry<String, JsonNode> pathEn = paths.next();
-                final String apiPath = pathEn.getKey();
+            Map<String, Map<String, Map<String, Object>>> paths
+                = (Map<String, Map<String, Map<String, Object>>>) swaggerSpecNode.get("paths");
+            for (Entry<String, Map<String, Map<String, Object>>> path : paths.entrySet()) {
+                String apiPath = path.getKey();
+                final Map<String, Map<String, Object>> methods = path.getValue();
 
-                final JsonNode methods = pathEn.getValue();
-                Iterator<Map.Entry<String, JsonNode>> entries = methods.fields();
-                while (entries.hasNext()) {
+                for (Entry<String, Map<String, Object>> method : methods.entrySet()) {
+                    String httpMethod = method.getKey();
+                    final List<Map<String, Object>> parameters = (List<Map<String, Object>>) method.getValue().get(
+                        "parameters");
 
-                    Map.Entry<String, JsonNode> en = entries.next();
-                    final Api api = new Api(globalSchemes, globalProduces, globalHost, globalBasePath, apiPath,
-                        en.getKey());
+                    Optional<Entry<Object, Map<String, Object>>> response = ((Map<Object, Map<String, Object>>) method
+                        .getValue().get("responses")).entrySet().stream().filter(
+                        k -> k.getKey().toString().equalsIgnoreCase("default") || (Integer.valueOf(
+                            k.getKey().toString()) < 300 && Integer.valueOf(k.getKey().toString()) >= 200)).findFirst();
 
-                    JsonNode details = en.getValue();
-
-                    ArrayNode params = (ArrayNode) details.get("parameters");
-                    api.setParameters(parseApiParameters(params));
-
-                    ArrayNode producesArray = (ArrayNode) details.get("produces");
-                    if (producesArray != null) {
-                        //override global produce
-                        Set<String> produceSet = new TreeSet<String>();
-                        for (Iterator<JsonNode> it = producesArray.elements(); it.hasNext(); ) {
-                            String produces = it.next().asText();
-                            produceSet.add(produces);
-                        }
-                        api.overrideGlobalProduceSetWith(produceSet);
+                    List<String> produces = new LinkedList<>();
+                    if (response.isPresent()) {
+                        produces = ((Map<String, Object>) response.get().getValue().get("content")).entrySet().stream()
+                            .map(k -> k.getKey()).collect(Collectors.toList());
                     }
+
+                    if (produces.isEmpty()) {
+                        produces.add("*/*");
+                    }
+
+                    final Api api = new Api(globalSchemes, produces, globalHost, "", apiPath, httpMethod.toUpperCase());
+
+                    api.setParameters(parseApiParameters(parameters));
 
                     apiList.add(api);
                 }
@@ -163,29 +169,25 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
 
     }
 
-    private Set<ApiParameter> parseApiParameters(ArrayNode params) {
+    private Set<ApiParameter> parseApiParameters(final List<Map<String, Object>> parameters) {
 
-        Set<ApiParameter> result = new HashSet<ApiParameter>();
+        Set<ApiParameter> result = new HashSet<>();
 
-        if (params == null) {
+        if (parameters == null) {
             return result;
         }
 
-        final Iterator<JsonNode> elements = params.elements();
-        while (elements.hasNext()) {
-            final JsonNode paramNode = elements.next();
-            final String paramName = paramNode.get("name").asText();
-            final ParamType type = ApiParameter.parseParamType(paramNode.get("in").asText());
-            final boolean required = paramNode.get("required").asBoolean();
-            final ArrayNode enumVals = (ArrayNode) paramNode.get("enum");
-            final String exampleValue = paramNode.get("x-example") == null ? null : paramNode.get("x-example").asText();
+        for (Map<String, Object> param : parameters) {
+            final String paramName = (String) param.get("name");
+            final ParamType type = ApiParameter.parseParamType((String) param.get("in"));
+            final boolean required = param.get("required") == null ? false : (Boolean) param.get("required");
+            final String exampleValue = param.get("example") == null ? null : param.get("example").toString();
 
-            List<String> enumValList = new LinkedList<String>();
-            if (enumVals != null) {
-                for (Iterator<JsonNode> i = enumVals.elements(); i.hasNext(); ) {
-                    String val = i.next().asText();
-                    enumValList.add(val);
-                }
+            final Map<String, Object> schema = (Map<String, Object>) param.get("schema");
+            List<String> enumValList = new LinkedList<>();
+
+            if (schema != null && schema.get("enum") != null) {
+                ((List<Object>) schema.get("enum")).stream().map(k -> k.toString()).forEach(enumValList::add);
             }
 
             if (enumValList.isEmpty() && exampleValue != null) {
@@ -199,33 +201,13 @@ public class SwaggerUrlMavenPluginMojo extends AbstractMojo {
         return result;
     }
 
-    private final List<String> parseArray(final JsonNode swaggerSpecNode, final String elName) {
-
-        final List<String> result = new LinkedList<String>();
-
-        JsonNode e = swaggerSpecNode.get(elName);
-        if (e == null) {
-            return result;
-        }
-
-        final Iterator<JsonNode> schemesIt = e.elements();
-
-        while (schemesIt.hasNext()) {
-            final JsonNode schema = schemesIt.next();
-            if (schema != null && schema.isTextual()) {
-                result.add(schema.asText());
-            }
-        }
-
-        return result;
-    }
 
     public static class ApiParameter {
 
         private String paramName;
         private ParamType paramType;
         private boolean required;
-        private List<String> values = new LinkedList<String>();
+        private List<String> values = new LinkedList<>();
 
         public ApiParameter(String paramName, ParamType type, boolean required, List<String> enumValList) {
             this.paramName = paramName;
